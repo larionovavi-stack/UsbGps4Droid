@@ -3,19 +3,19 @@
  * Copyright (C) 2010, 2011, 2012 Herbert von Broeuschmeul
  * Copyright (C) 2010, 2011, 2012 BluetoothGPS4Droid Project
  * Copyright (C) 2011, 2012 UsbGPS4Droid Project
- * 
+ *
  * This file is part of UsbGPS4Droid.
  *
  * UsbGPS4Droid is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- * 
+ *
  * UsbGPS4Droid is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- * 
+ *
  *  You should have received a copy of the GNU General Public License
  *  along with UsbGPS4Droid. If not, see <http://www.gnu.org/licenses/>.
  */
@@ -27,8 +27,10 @@ import java.util.HashMap;
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.AlertDialog;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.content.SharedPreferences.OnSharedPreferenceChangeListener;
 import android.hardware.usb.UsbDevice;
@@ -36,14 +38,15 @@ import android.hardware.usb.UsbManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
-import android.support.v7.app.AppCompatDelegate;
-import android.support.v7.preference.CheckBoxPreference;
-import android.support.v7.preference.ListPreference;
-import android.support.v7.preference.Preference;
-import android.support.v7.preference.PreferenceManager;
-import android.support.v7.preference.Preference.OnPreferenceChangeListener;
-import android.support.v14.preference.SwitchPreference;
-import android.support.v7.preference.PreferenceFragmentCompat;
+import android.os.IBinder;
+import androidx.appcompat.app.AppCompatDelegate;
+import androidx.preference.CheckBoxPreference;
+import androidx.preference.ListPreference;
+import androidx.preference.Preference;
+import androidx.preference.PreferenceManager;
+import androidx.preference.Preference.OnPreferenceChangeListener;
+import androidx.preference.SwitchPreferenceCompat;
+import androidx.preference.PreferenceFragmentCompat;
 import android.text.method.LinkMovementMethod;
 import android.util.Log;
 import android.view.View;
@@ -112,11 +115,13 @@ public class USBGpsSettingsFragment extends PreferenceFragmentCompat implements
     private ListPreference deviceSpeedPreference;
 
     private UsbManager usbManager;
-    private ActivityManager activityManager;
 
     private Handler mainHandler;
 
     private PreferenceScreenListener callback;
+
+    // Used to check if the service is running via ServiceConnection instead of deprecated getRunningServices
+    private boolean serviceRunning = false;
 
     // Used to allow for nested preference screens in an android fragment
     public interface PreferenceScreenListener {
@@ -143,7 +148,6 @@ public class USBGpsSettingsFragment extends PreferenceFragmentCompat implements
         sharedPreferences.registerOnSharedPreferenceChangeListener(this);
 
         usbManager = (UsbManager) getActivity().getSystemService(Context.USB_SERVICE);
-        activityManager = (ActivityManager) getActivity().getSystemService(Context.ACTIVITY_SERVICE);
         mainHandler = new Handler(getActivity().getMainLooper());
 
         setupNestedPreferences();
@@ -151,7 +155,7 @@ public class USBGpsSettingsFragment extends PreferenceFragmentCompat implements
 
     private void onDaynightModeChanged(boolean on) {
         AppCompatDelegate.setDefaultNightMode(on ?
-                AppCompatDelegate.MODE_NIGHT_AUTO:
+                AppCompatDelegate.MODE_NIGHT_AUTO_BATTERY:
                 AppCompatDelegate.MODE_NIGHT_YES
         );
         getActivity().recreate();
@@ -199,6 +203,17 @@ public class USBGpsSettingsFragment extends PreferenceFragmentCompat implements
                     }
                 });
 
+        findPreference(getString(R.string.pref_ubx_receiver_screen_key))
+                .setOnPreferenceClickListener(new Preference.OnPreferenceClickListener() {
+                    @Override
+                    public boolean onPreferenceClick(Preference preference) {
+                        if (callback != null) {
+                            callback.onNestedScreenClicked(new ReceiverConfigFragment());
+                        }
+                        return false;
+                    }
+                });
+
         findPreference(getString(R.string.pref_daynight_theme_key))
                 .setOnPreferenceChangeListener(new OnPreferenceChangeListener() {
                     @Override
@@ -221,21 +236,12 @@ public class USBGpsSettingsFragment extends PreferenceFragmentCompat implements
     }
 
     @Override
-    @SuppressWarnings("deprecation")
-    public void onAttach(Activity context) {
-        super.onAttach(context);
-
-        if (context instanceof PreferenceScreenListener) {
-            callback = (PreferenceScreenListener) context;
-        } else {
-            throw new IllegalStateException("Owner must implement PreferenceScreenListener interface");
-        }
-    }
-
-    @Override
     public void onResume() {
         usbCheckThread = new Thread(usbCheckRunnable);
         usbCheckThread.start();
+
+        // Check if service is running using ServiceConnection (replaces deprecated getRunningServices)
+        checkServiceRunning();
 
         final CheckBoxPreference timePreference =
                 (CheckBoxPreference) findPreference(USBGpsProviderService.PREF_SET_TIME);
@@ -273,16 +279,44 @@ public class USBGpsSettingsFragment extends PreferenceFragmentCompat implements
     }
 
     /**
+     * Checks if the service is running by attempting to bind to it.
+     * This replaces the deprecated ActivityManager.getRunningServices().
+     */
+    private void checkServiceRunning() {
+        try {
+            Intent intent = new Intent(getActivity(), USBGpsProviderService.class);
+            boolean bound = getActivity().bindService(intent, new ServiceConnection() {
+                @Override
+                public void onServiceConnected(ComponentName name, IBinder service) {
+                    serviceRunning = true;
+                    try {
+                        getActivity().unbindService(this);
+                    } catch (Exception ignored) {
+                    }
+                }
+
+                @Override
+                public void onServiceDisconnected(ComponentName name) {
+                    serviceRunning = false;
+                }
+            }, 0); // flags=0 means don't auto-create
+
+            if (!bound) {
+                serviceRunning = false;
+            }
+        } catch (Exception e) {
+            serviceRunning = false;
+        }
+    }
+
+    /**
      * If the service is killed then the shared preference for the service is never updated.
-     * This checks if the service is running from the running preferences list
+     * This checks if the service is running.
      */
     private boolean isServiceRunning() {
-        for (ActivityManager.RunningServiceInfo service : activityManager.getRunningServices(Integer.MAX_VALUE)) {
-            if (USBGpsProviderService.class.getName().equals(service.service.getClassName())) {
-                return true;
-            }
-        }
-        return false;
+        // Use the cached value from checkServiceRunning(), or fall back to preference
+        return serviceRunning ||
+                sharedPreferences.getBoolean(USBGpsProviderService.PREF_START_GPS_PROVIDER, false);
     }
 
     /**
@@ -452,7 +486,7 @@ public class USBGpsSettingsFragment extends PreferenceFragmentCompat implements
         switch(key) {
             case USBGpsProviderService.PREF_START_GPS_PROVIDER: {
                 boolean val = sharedPreferences.getBoolean(key, false);
-                SwitchPreference pref = (SwitchPreference)
+                SwitchPreferenceCompat pref = (SwitchPreferenceCompat)
                         findPreference(USBGpsProviderService.PREF_START_GPS_PROVIDER);
 
                 if (pref.isChecked() != val) {
@@ -464,7 +498,7 @@ public class USBGpsSettingsFragment extends PreferenceFragmentCompat implements
 
             case USBGpsProviderService.PREF_TRACK_RECORDING: {
                 boolean val = sharedPreferences.getBoolean(key, false);
-                SwitchPreference pref = (SwitchPreference)
+                SwitchPreferenceCompat pref = (SwitchPreferenceCompat)
                         findPreference(USBGpsProviderService.PREF_TRACK_RECORDING);
 
                 if (pref.isChecked() != val) {

@@ -117,12 +117,16 @@
 
     <string name="about_title">About</string>
     <string name="about_version">UsbGPS4Droid %s</string>
+    <string name="about_copyright_0">v3.0.0 — Copyright (C) 2026 Larionov Alexander Viktorovich (avlarionov@hotmail.com)\nUBX protocol, Dead Reckoning, Android 14+ support</string>
     <string name="about_copyright_1">Copyright (C) 2015-2017 Oliver Bell</string>
     <string name="about_copyright_2">Copyright (C) 2010-2013 Herbert von Broeuschmeul</string>
     <string name="about_copyright_3">Copyright (C) 2010-2013 BluetoothGPS4Droid Project</string>
     <string name="about_copyright_4">Copyright (C) 2011-2013 UsbGPS4Droid Project</string>
     <string name="about_app_desc">Usb GPS for Android is an application
                                     for using an external usb GPS on Android devices.
+                                    \n\nv3.0.0 features: UBX binary protocol, Dead Reckoning (LEA-6R),
+                                    receiver configuration, multi-chip USB-serial support (CP210x, FTDI, PL2303, CH340),
+                                    Android 14+ compatibility.
     </string>
     <string name="about_license">It is open source software 
     	distributed free of charge under the terms of the <a href="http://www.gnu.org/licenses/gpl-3.0-standalone.html"><b>GNU General Public License</b></a>.
@@ -184,5 +188,96 @@
     <string name="pref_daynight_theme_title">Automatic day-night app theme</string>
     <string name="pref_daynight_theme_summary">Show light theme during daytime and dark theme at night</string>
     <string name="pref_daynight_theme_key">dayNightMode</string>
+
+    <!-- UBX Receiver Configuration -->
+    <string name="pref_category_ubx_title">u-blox Receiver</string>
+    <string name="pref_ubx_receiver_title">Receiver Configuration</string>
+    <string name="pref_ubx_receiver_summary">Configure u-blox receiver (rate, model, protocol)</string>
+
+    <string name="pref_ubx_category_protocol_title">Protocol</string>
+    <string name="pref_ubx_protocol_mode_title">Protocol Mode</string>
+    <string name="pref_ubx_protocol_mode_summary">Select input/output protocol</string>
+    <string name="pref_ubx_protocol_mode_summary_val">Current: %s</string>
+
+    <string name="pref_ubx_category_rate_title">Update Rate</string>
+    <string name="pref_ubx_update_rate_title">Measurement Rate</string>
+    <string name="pref_ubx_update_rate_summary">GPS update frequency</string>
+    <string name="pref_ubx_update_rate_summary_val">Current: %s</string>
+
+    <string name="pref_ubx_category_navigation_title">Navigation</string>
+    <string name="pref_ubx_dynamic_model_title">Dynamic Model</string>
+    <string name="pref_ubx_dynamic_model_summary">Optimize for usage scenario</string>
+    <string name="pref_ubx_dynamic_model_summary_val">Current: %s</string>
+
+    <string name="pref_ubx_sbas_title">SBAS (WAAS/EGNOS)</string>
+    <string name="pref_ubx_sbas_summary">Enable satellite-based augmentation</string>
+
+    <string name="pref_ubx_dead_reckoning_title">Dead Reckoning (LEA-6R)</string>
+    <string name="pref_ubx_dead_reckoning_summary">Enable automotive dead reckoning for tunnel/garage navigation</string>
+
+    <string name="pref_ubx_category_actions_title">Receiver Actions</string>
+    <string name="pref_ubx_save_config_title">Save Config to Flash</string>
+    <string name="pref_ubx_save_config_summary">Save current configuration to receiver non-volatile memory</string>
+    <string name="pref_ubx_save_config_toast">Saving configuration to receiver flash...</string>
+
+    <string name="pref_ubx_reset_receiver_title">Reset Receiver</string>
+    <string name="pref_ubx_reset_receiver_summary">Restart the GPS receiver</string>
+    <string name="pref_ubx_reset_toast">Performing %s restart...</string>
+
+    <string-array name="pref_ubx_protocol_mode_entries">
+        <item>NMEA only</item>
+        <item>UBX only</item>
+        <item>NMEA + UBX</item>
+    </string-array>
+    <string-array name="pref_ubx_protocol_mode_values">
+        <item>nmea</item>
+        <item>ubx</item>
+        <item>both</item>
+    </string-array>
+
+    <string-array name="pref_ubx_update_rate_entries">
+        <item>1 Hz</item>
+        <item>2 Hz</item>
+        <item>5 Hz</item>
+        <item>10 Hz</item>
+    </string-array>
+    <string-array name="pref_ubx_update_rate_values">
+        <item>1000</item>
+        <item>500</item>
+        <item>200</item>
+        <item>100</item>
+    </string-array>
+
+    <string-array name="pref_ubx_dynamic_model_entries">
+        <item>Portable</item>
+        <item>Stationary</item>
+        <item>Pedestrian</item>
+        <item>Automotive</item>
+        <item>Sea</item>
+        <item>Airborne 1G</item>
+        <item>Airborne 2G</item>
+        <item>Airborne 4G</item>
+    </string-array>
+    <string-array name="pref_ubx_dynamic_model_values">
+        <item>0</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+        <item>5</item>
+        <item>6</item>
+        <item>7</item>
+        <item>8</item>
+    </string-array>
+
+    <string-array name="pref_ubx_reset_entries">
+        <item>Hot Start</item>
+        <item>Warm Start</item>
+        <item>Cold Start</item>
+    </string-array>
+    <string-array name="pref_ubx_reset_values">
+        <item>hot</item>
+        <item>warm</item>
+        <item>cold</item>
+    </string-array>
 
 </resources>

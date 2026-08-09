@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?><!--
+    Copyright (C) 2026 UsbGPS4Droid Project
+
+    This file is part of UsbGPS4Droid.
+
+    UsbGPS4Droid is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    UsbGPS4Droid is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with UsbGPS4Droid.  If not, see http://www.gnu.org/licenses/
+-->
+
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    android:title="@string/pref_ubx_receiver_title">
+
+    <PreferenceCategory
+        android:title="@string/pref_ubx_category_protocol_title">
+
+        <ListPreference
+            android:key="@string/pref_ubx_protocol_mode_key"
+            android:title="@string/pref_ubx_protocol_mode_title"
+            android:summary="@string/pref_ubx_protocol_mode_summary"
+            android:entries="@array/pref_ubx_protocol_mode_entries"
+            android:entryValues="@array/pref_ubx_protocol_mode_values"
+            android:defaultValue="nmea" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:title="@string/pref_ubx_category_rate_title">
+
+        <ListPreference
+            android:key="@string/pref_ubx_update_rate_key"
+            android:title="@string/pref_ubx_update_rate_title"
+            android:summary="@string/pref_ubx_update_rate_summary"
+            android:entries="@array/pref_ubx_update_rate_entries"
+            android:entryValues="@array/pref_ubx_update_rate_values"
+            android:defaultValue="1000" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:title="@string/pref_ubx_category_navigation_title">
+
+        <ListPreference
+            android:key="@string/pref_ubx_dynamic_model_key"
+            android:title="@string/pref_ubx_dynamic_model_title"
+            android:summary="@string/pref_ubx_dynamic_model_summary"
+            android:entries="@array/pref_ubx_dynamic_model_entries"
+            android:entryValues="@array/pref_ubx_dynamic_model_values"
+            android:defaultValue="0" />
+
+        <SwitchPreferenceCompat
+            android:key="@string/pref_ubx_sbas_key"
+            android:title="@string/pref_ubx_sbas_title"
+            android:summary="@string/pref_ubx_sbas_summary"
+            android:defaultValue="true" />
+
+        <SwitchPreferenceCompat
+            android:key="@string/pref_ubx_dead_reckoning_key"
+            android:title="@string/pref_ubx_dead_reckoning_title"
+            android:summary="@string/pref_ubx_dead_reckoning_summary"
+            android:defaultValue="false" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
+        android:title="@string/pref_ubx_category_actions_title">
+
+        <Preference
+            android:key="@string/pref_ubx_save_config_key"
+            android:title="@string/pref_ubx_save_config_title"
+            android:summary="@string/pref_ubx_save_config_summary" />
+
+        <ListPreference
+            android:key="@string/pref_ubx_reset_receiver_key"
+            android:title="@string/pref_ubx_reset_receiver_title"
+            android:summary="@string/pref_ubx_reset_receiver_summary"
+            android:entries="@array/pref_ubx_reset_entries"
+            android:entryValues="@array/pref_ubx_reset_values" />
+
+    </PreferenceCategory>
+
+</PreferenceScreen>

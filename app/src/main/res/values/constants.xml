@@ -96,4 +96,14 @@
     <string name="sirf_bin_dgps_ext_on">85020000000000</string>
     <string name="sirf_bin_dgps_sbas_on">85010000000000</string>
     <string name="sirf_software_version">8400</string>
+
+    <!-- UBX Receiver preference keys -->
+    <string name="pref_ubx_receiver_screen_key">ubxReceiverPreferences</string>
+    <string name="pref_ubx_protocol_mode_key">ubxProtocolMode</string>
+    <string name="pref_ubx_update_rate_key">ubxUpdateRate</string>
+    <string name="pref_ubx_dynamic_model_key">ubxDynamicModel</string>
+    <string name="pref_ubx_sbas_key">ubxSbas</string>
+    <string name="pref_ubx_dead_reckoning_key">ubxDeadReckoning</string>
+    <string name="pref_ubx_save_config_key">ubxSaveConfig</string>
+    <string name="pref_ubx_reset_receiver_key">ubxResetReceiver</string>
 </resources>

@@ -3,19 +3,19 @@
  * Copyright (C) 2010, 2011, 2012 Herbert von Broeuschmeul
  * Copyright (C) 2010, 2011, 2012 BluetoothGPS4Droid Project
  * Copyright (C) 2011, 2012 UsbGPS4Droid Project
- * 
+ *
  * This file is part of UsbGPS4Droid.
  *
  * UsbGPS4Droid is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- * 
+ *
  * UsbGPS4Droid is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- * 
+ *
  *  You should have received a copy of the GNU General Public License
  *  along with UsbGPS4Droid. If not, see <http://www.gnu.org/licenses/>.
  */
@@ -46,6 +46,9 @@ import java.util.concurrent.TimeUnit;
 
 import org.broeuschmeul.android.gps.nmea.util.NmeaParser;
 import org.broeuschmeul.android.gps.sirf.util.SirfUtils;
+import org.broeuschmeul.android.gps.ubx.DeadReckoningManager;
+import org.broeuschmeul.android.gps.ubx.UbxCommands;
+import org.broeuschmeul.android.gps.ubx.UbxParser;
 import org.broeuschmeul.android.gps.usb.provider.BuildConfig;
 import org.broeuschmeul.android.gps.usb.provider.R;
 import org.broeuschmeul.android.gps.usb.provider.USBGpsApplication;
@@ -64,13 +67,12 @@ import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.hardware.usb.UsbConstants;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
-import android.hardware.usb.UsbEndpoint;
-import android.hardware.usb.UsbInterface;
 import android.hardware.usb.UsbManager;
+import android.location.Location;
 import android.location.LocationManager;
+import android.location.LocationProvider;
 import android.os.Build;
 import android.os.Handler;
 import android.preference.PreferenceManager;
@@ -78,9 +80,13 @@ import android.app.AppOpsManager;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.provider.Settings;
-import android.support.v4.app.NotificationCompat;
-import android.support.v4.content.ContextCompat;
+import androidx.core.app.NotificationCompat;
+import androidx.core.content.ContextCompat;
 import android.util.Log;
+
+import com.hoho.android.usbserial.driver.UsbSerialDriver;
+import com.hoho.android.usbserial.driver.UsbSerialPort;
+import com.hoho.android.usbserial.driver.UsbSerialProber;
 
 
 /**
@@ -141,35 +147,16 @@ public class USBGpsManager {
     };
 
     /**
-     * A utility class used to manage the communication with the bluetooth GPS whn the connection has been established.
+     * A utility class used to manage the communication with the USB GPS using usb-serial-for-android.
      * It is used to read NMEA data from the GPS or to send SIRF III binary commands or SIRF III NMEA commands to the GPS.
      * You should run the main read loop in one thread and send the commands in a separate one.
      *
      * @author Herbert von Broeuschmeul
      */
     private class ConnectedGps extends Thread {
-        /**
-         * GPS bluetooth socket used for communication.
-         */
-        private final File gpsDev;
         private final UsbDevice gpsUsbDev;
-        private final UsbInterface intf;
-        private UsbEndpoint endpointIn;
-        private UsbEndpoint endpointOut;
-        private final UsbDeviceConnection connection;
+        private UsbSerialPort serialPort;
         private boolean closed = false;
-        /**
-         * GPS InputStream from which we read data.
-         */
-        private final InputStream in;
-        /**
-         * GPS output stream to which we send data (SIRF III binary commands).
-         */
-        private final OutputStream out;
-        /**
-         * GPS output stream to which we send data (SIRF III NMEA commands).
-         */
-        private final PrintStream out2;
         /**
          * A boolean which indicates if the GPS is ready to receive data.
          * In fact we consider that the GPS is ready when it begins to sends data...
@@ -181,445 +168,82 @@ public class USBGpsManager {
         }
 
         public ConnectedGps(UsbDevice device, String deviceSpeed) {
-            this.gpsDev = null;
             this.gpsUsbDev = device;
 
-            debugLog("Searching interfaces, found " + String.valueOf(device.getInterfaceCount()));
+            debugLog("Opening USB serial connection using usb-serial-for-android");
 
-            UsbInterface foundInterface = null;
+            // Use UsbSerialProber to auto-detect the driver (CP210x, FTDI, PL2303, CH340, CDC-ACM)
+            List<UsbSerialDriver> availableDrivers = UsbSerialProber.getDefaultProber().findAllDrivers(usbManager);
 
-            for (int j = 0; j < device.getInterfaceCount(); j++) {
-                debugLog("Checking interface number " + String.valueOf(j));
-
-                UsbInterface deviceInterface = device.getInterface(j);
-
-                debugLog("Found interface of class " + String.valueOf(deviceInterface.getInterfaceClass()));
-
-                // Finds an endpoint for the device by looking through all the device endpoints
-                // and finding which one supports,
-
-                debugLog("Searching endpoints of interface, found " + String.valueOf(deviceInterface.getEndpointCount()));
-
-                UsbEndpoint foundInEndpoint = null;
-                UsbEndpoint foundOutEndpoint = null;
-
-                for (int i = deviceInterface.getEndpointCount() - 1; i > -1; i--) {
-                    debugLog("Checking endpoint number " + String.valueOf(i));
-
-                    UsbEndpoint interfaceEndpoint = deviceInterface.getEndpoint(i);
-
-                    if (interfaceEndpoint.getDirection() == UsbConstants.USB_DIR_IN) {
-                        debugLog("Found IN Endpoint of type: " + String.valueOf(interfaceEndpoint.getType()));
-
-                        if (interfaceEndpoint.getType() == UsbConstants.USB_ENDPOINT_XFER_BULK) {
-
-                            debugLog("Is correct in endpoint");
-
-                            foundInEndpoint = interfaceEndpoint;
-                        }
-                    }
-                    if (interfaceEndpoint.getDirection() == UsbConstants.USB_DIR_OUT) {
-                            debugLog("Found OUT Endpoint of type: " + String.valueOf(interfaceEndpoint.getType()));
-
-                        if (interfaceEndpoint.getType() == UsbConstants.USB_ENDPOINT_XFER_BULK) {
-
-                            debugLog("Is correct out endpoint");
-
-                            foundOutEndpoint = interfaceEndpoint;
-                        }
-                    }
-
-                    if ((foundInEndpoint != null) && (foundOutEndpoint != null)) {
-                        endpointIn = foundInEndpoint;
-                        endpointOut = foundOutEndpoint;
-                        break;
-                    }
-                }
-
-                if ((endpointIn != null) && (endpointOut != null)) {
-                    foundInterface = deviceInterface;
+            UsbSerialDriver selectedDriver = null;
+            for (UsbSerialDriver driver : availableDrivers) {
+                if (driver.getDevice().equals(device)) {
+                    selectedDriver = driver;
                     break;
                 }
             }
 
-            intf = foundInterface;
-//            endpointIn = intf.getEndpoint(2);
-            final int TIMEOUT = 100;
-//            final int TIMEOUT = 0;
-            connection = usbManager.openDevice(device);
-
-            if (intf != null) {
-
-                debugLog("claiming interface");
-
-                boolean resclaim = connection.claimInterface(intf, true);
-
-                debugLog("data claim " + resclaim);
+            if (selectedDriver == null) {
+                if (BuildConfig.DEBUG || debug)
+                    Log.e(LOG_TAG, "No USB serial driver found for device, notifying");
+                disable(R.string.msg_gps_provider_cant_connect);
+                closed = true;
+                return;
             }
 
-            InputStream tmpIn = null;
-            OutputStream tmpOut = null;
-            PrintStream tmpOut2 = null;
+            debugLog("Found driver: " + selectedDriver.getClass().getSimpleName());
 
-            tmpIn = new InputStream() {
-                private byte[] buffer = new byte[128];
-                private byte[] usbBuffer = new byte[64];
-                private byte[] oneByteBuffer = new byte[1];
-                private ByteBuffer bufferWrite = ByteBuffer.wrap(buffer);
-                private ByteBuffer bufferRead = (ByteBuffer) ByteBuffer.wrap(buffer).limit(0);
-                private boolean closed = false;
+            // Open connection
+            UsbDeviceConnection connection = usbManager.openDevice(device);
+            if (connection == null) {
+                if (BuildConfig.DEBUG || debug)
+                    Log.e(LOG_TAG, "Could not open USB device connection");
+                disable(R.string.msg_gps_provider_cant_connect);
+                closed = true;
+                return;
+            }
 
-                @Override
-                public int read() throws IOException {
-                    int b = 0;
-                    //if (BuildConfig.DEBUG || debug) Log.d(LOG_TAG, "trying to read data");
-                    int nb = 0;
-                    while ((nb == 0) && (!closed)) {
-                        nb = this.read(oneByteBuffer, 0, 1);
-                    }
-                    if (nb > 0) {
-                        b = oneByteBuffer[0];
-                    } else {
-                        // TODO : if nb = 0 then we have a pb
-                        b = -1;
-                        Log.e(LOG_TAG, "data read() error code: " + nb);
-                    }
-                    if (b <= 0) {
-                        Log.e(LOG_TAG, "data read() error: char " + b);
-                    }
-                    //if (BuildConfig.DEBUG || debug) Log.d(LOG_TAG, "data: " + b + " char: " + (char)b);
-                    return b;
-                }
-
-                /* (non-Javadoc)
-                 * @see java.io.InputStream#available()
-                 */
-                @Override
-                public int available() throws IOException {
-                    // TODO Auto-generated method stub
-                    //if (BuildConfig.DEBUG || debug) Log.d(LOG_TAG, "data available "+bufferRead.remaining());
-                    return bufferRead.remaining();
-                }
-
-                /* (non-Javadoc)
-                 * @see java.io.InputStream#mark(int)
-                 */
-                @Override
-                public void mark(int readlimit) {
-                    // TODO Auto-generated method stub
-                    //if (BuildConfig.DEBUG || debug) Log.d(LOG_TAG, "data mark");
-                    super.mark(readlimit);
-                }
-
-                /* (non-Javadoc)
-                 * @see java.io.InputStream#markSupported()
-                 */
-                @Override
-                public boolean markSupported() {
-                    // TODO Auto-generated method stub
-                    //if (BuildConfig.DEBUG || debug) Log.d(LOG_TAG, "data markSupported");
-                    return super.markSupported();
-                }
-
-                /* (non-Javadoc)
-                 * @see java.io.InputStream#read(byte[], int, int)
-                 */
-                @Override
-                public int read(byte[] buffer, int offset, int length)
-                        throws IOException {
-//                    if (BuildConfig.DEBUG || debug) Log.d(LOG_TAG, "data read buffer - offset: " + offset + " length: " + length);
-
-                    int nb = 0;
-                    ByteBuffer out = ByteBuffer.wrap(buffer, offset, length);
-                    if ((!bufferRead.hasRemaining()) && (!closed)) {
-//                        if (BuildConfig.DEBUG || debug) Log.i(LOG_TAG, "data read buffer empty " + Arrays.toString(usbBuffer));
-
-                        int n = connection.bulkTransfer(endpointIn, usbBuffer, 64, 10000);
-
-//                      if (BuildConfig.DEBUG || debug) Log.w(LOG_TAG, "data read: nb: " + n + " " + Arrays.toString(usbBuffer));
-
-                        if (n > 0) {
-                            if (n > bufferWrite.remaining()) {
-                                bufferRead.rewind();
-                                bufferWrite.clear();
-                            }
-                            bufferWrite.put(usbBuffer, 0, n);
-                            bufferRead.limit(bufferWrite.position());
-//                            if (BuildConfig.DEBUG || debug) Log.d(LOG_TAG, "data read: nb: " + n + " current: " + bufferRead.position() + " limit: " + bufferRead.limit() + " " + Arrays.toString(bufferRead.array()));
-                        } else {
-                            if (BuildConfig.DEBUG || debug)
-                                Log.e(LOG_TAG, "data read(buffer...) error: " + nb );
-                        }
-                    }
-                    if (bufferRead.hasRemaining()) {
-//                      if (BuildConfig.DEBUG || debug) Log.d(LOG_TAG, "data : asked: " + length + " current: " + bufferRead.position() + " limit: " + bufferRead.limit() + " " + Arrays.toString(bufferRead.array()));
-                        nb = Math.min(bufferRead.remaining(), length);
-                        out.put(bufferRead.array(), bufferRead.position() + bufferRead.arrayOffset(), nb);
-                        bufferRead.position(bufferRead.position() + nb);
-//                      if (BuildConfig.DEBUG || debug) Log.d(LOG_TAG, "data : given: " + nb + " current: " + bufferRead.position() + " limit: " + bufferRead.limit() + " " + Arrays.toString(bufferRead.array()));
-//                      if (BuildConfig.DEBUG || debug) Log.d(LOG_TAG, "data : given: " + nb + " offset: " + offset + " " + Arrays.toString(buffer));
-                    }
-                    return nb;
-                }
-
-                /* (non-Javadoc)
-                 * @see java.io.InputStream#read(byte[])
-                 */
-
-                @Override
-                public int read(byte[] buffer) throws IOException {
-                    // TODO Auto-generated method stub
-                    log("data read buffer");
-                    return super.read(buffer);
-                }
-
-                /* (non-Javadoc)
-                 * @see java.io.InputStream#reset()
-                 */
-                @Override
-                public synchronized void reset() throws IOException {
-                    // TODO Auto-generated method stub
-                    log("data reset");
-                    super.reset();
-                }
-
-                /* (non-Javadoc)
-                 * @see java.io.InputStream#skip(long)
-                 */
-                @Override
-                public long skip(long byteCount) throws IOException {
-                    // TODO Auto-generated method stub
-                    log("data skip");
-                    return super.skip(byteCount);
-                }
-
-                /* (non-Javadoc)
-                 * @see java.io.InputStream#close()
-                 */
-                @Override
-                public void close() throws IOException {
-                    super.close();
-                    closed = true;
-                }
-            };
-
-            tmpOut = new OutputStream() {
-                private byte[] buffer = new byte[128];
-                private byte[] usbBuffer = new byte[64];
-                private byte[] oneByteBuffer = new byte[1];
-                private ByteBuffer bufferWrite = ByteBuffer.wrap(buffer);
-                private ByteBuffer bufferRead = (ByteBuffer) ByteBuffer.wrap(buffer).limit(0);
-                private boolean closed = false;
-
-                @Override
-                public void write(int oneByte) throws IOException {
-                    //if (BuildConfig.DEBUG || debug)
-                    //    Log.d(LOG_TAG, "trying to write data (one byte): " + oneByte + " char: " + (char) oneByte);
-                    oneByteBuffer[0] = (byte) oneByte;
-                    this.write(oneByteBuffer, 0, 1);
-                    //if (BuildConfig.DEBUG || debug)
-                    //    Log.d(LOG_TAG, "writen data (one byte): " + oneByte + " char: " + (char) oneByte);
-                }
-
-                /* (non-Javadoc)
-                 * @see java.io.OutputStream#write(byte[], int, int)
-                 */
-                @Override
-                public void write(byte[] buffer, int offset, int count)
-                        throws IOException {
-                    //if (BuildConfig.DEBUG || debug)
-                    //    Log.d(LOG_TAG, "trying to write data : " + Arrays.toString(buffer) + " offset " + offset + " count: " + count);
-                    bufferWrite.clear();
-                    bufferWrite.put(buffer, offset, count);
-                    //if (BuildConfig.DEBUG || debug)
-                    //    Log.d(LOG_TAG, "trying to write data : " + Arrays.toString(this.buffer));
-                    int n = 0;
-                    if (!closed) {
-                        n = connection.bulkTransfer(endpointOut, this.buffer, count, TIMEOUT);
-                    } else {
-                        if (BuildConfig.DEBUG || debug)
-                            Log.e(LOG_TAG, "error while trying to write data: outputStream closed");
-                    }
-                    if (n != count) {
-                        if (BuildConfig.DEBUG || debug) {
-                            Log.e(LOG_TAG, "error while trying to write data: " + Arrays.toString(this.buffer));
-                            Log.e(LOG_TAG, "error while trying to write data: " + n + " bytes written when expecting " + count);
-                        }
-                        throw new IOException("error while trying to write data: " + Arrays.toString(this.buffer));
-                    }
-                    //if (BuildConfig.DEBUG || debug)
-                    //    Log.d(LOG_TAG, "writen data (one byte): " + Arrays.toString(this.buffer));
-                }
-
-                /* (non-Javadoc)
-                 * @see java.io.OutputStream#close()
-                 */
-                @Override
-                public void close() throws IOException {
-                    // TODO Auto-generated method stub
-                    super.close();
-                    closed = true;
-                }
-
-                /* (non-Javadoc)
-                 * @see java.io.OutputStream#flush()
-                 */
-                @Override
-                public void flush() throws IOException {
-                    // TODO Auto-generated method stub
-                    super.flush();
-                }
-
-                /* (non-Javadoc)
-                 * @see java.io.OutputStream#write(byte[])
-                 */
-                @Override
-                public void write(byte[] buffer) throws IOException {
-                    // TODO Auto-generated method stub
-                    super.write(buffer);
-                }
-
-            };
-
-
+            serialPort = selectedDriver.getPorts().get(0);
 
             try {
-                if (tmpOut != null) {
-                    tmpOut2 = new PrintStream(tmpOut, false, "US-ASCII");
+                serialPort.open(connection);
+
+                int baudRate;
+                if (setDeviceSpeed) {
+                    baudRate = Integer.parseInt(deviceSpeed);
+                } else {
+                    baudRate = Integer.parseInt(defaultDeviceSpeed);
                 }
-            } catch (UnsupportedEncodingException e) {
-                if (BuildConfig.DEBUG || debug)
-                    Log.e(LOG_TAG, "error while getting usb output streams", e);
-            }
 
-            in = tmpIn;
-            out = tmpOut;
-            out2 = tmpOut2;
+                serialPort.setParameters(
+                    baudRate,
+                    UsbSerialPort.DATABITS_8,
+                    UsbSerialPort.STOPBITS_1,
+                    UsbSerialPort.PARITY_NONE
+                );
 
-            // We couldn't find an endpoint
-            if (endpointIn == null || endpointOut == null) {
+                debugLog("Serial port opened at " + baudRate + " baud, 8N1");
+
+            } catch (IOException e) {
                 if (BuildConfig.DEBUG || debug)
-                    Log.e(LOG_TAG, "We couldn't find an endpoint for the device, notifying");
+                    Log.e(LOG_TAG, "Error opening serial port", e);
                 disable(R.string.msg_gps_provider_cant_connect);
                 close();
                 return;
             }
 
-            final int[] speedList = {Integer.valueOf(deviceSpeed), 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200};
-//            final List<String> speedList = Arrays.asList(new String[]{"1200", "2400", "4800", "9600", "19200", "38400", "57600", "115200"});
-            final byte[] data = {(byte) 0xC0, 0x12, 0x00, 0x00, 0x00, 0x00, 0x08};
-            final ByteBuffer connectionSpeedBuffer = ByteBuffer.wrap(data, 0, 4).order(java.nio.ByteOrder.LITTLE_ENDIAN);
-            final byte[] sirfBin2Nmea = SirfUtils.genSirfCommandFromPayload(callingService.getString(R.string.sirf_bin_to_nmea));
-            final byte[] datax = new byte[7];
-            final ByteBuffer connectionSpeedInfoBuffer = ByteBuffer.wrap(datax, 0, 7).order(java.nio.ByteOrder.LITTLE_ENDIAN);
-            final int res1 = connection.controlTransfer(0x21, 34, 0, 0, null, 0, TIMEOUT);
-
+            // Send SiRF binary-to-NMEA command if SiRF mode enabled
             if (sirfGps) {
-                debugLog("trying to switch from SiRF binaray to NMEA");
+                debugLog("trying to switch from SiRF binary to NMEA");
+                final byte[] sirfBin2Nmea = SirfUtils.genSirfCommandFromPayload(callingService.getString(R.string.sirf_bin_to_nmea));
                 try {
-                    connection.bulkTransfer(endpointOut, sirfBin2Nmea, sirfBin2Nmea.length, TIMEOUT);
-                } catch (NullPointerException e) {
+                    serialPort.write(sirfBin2Nmea, 100);
+                } catch (IOException e) {
                     if (BuildConfig.DEBUG || debug)
-                        Log.e(LOG_TAG, "Connection error");
+                        Log.e(LOG_TAG, "Error sending SiRF command", e);
                     close();
                     return;
                 }
-            }
-
-            if (setDeviceSpeed) {
-                debugLog("Setting connection speed to: " + deviceSpeed);
-                try {
-                    connectionSpeedBuffer.putInt(0, Integer.valueOf(deviceSpeed)); // Put the value in
-                    connection.controlTransfer(0x21, 32, 0, 0, data, 7, TIMEOUT); // Set baudrate
-                } catch (NullPointerException e) {
-                    if (BuildConfig.DEBUG || debug)
-                        Log.e(LOG_TAG, "Could not set speed");
-                    close();
-                }
-                /*
-                connection.controlTransfer(0x40, 0, 0, 0, null, 0, 0);                //reset
-                connection.controlTransfer(0x40, 0, 1, 0, null, 0, 0);                //clear Rx
-                connection.controlTransfer(0x40, 0, 2, 0, null, 0, 0);                //clear Tx
-                connection.controlTransfer(0x40, 0x02, 0x0000, 0, null, 0, 0);    //flow control none
-                connection.controlTransfer(0x40, 0x03, Integer.valueOf(deviceSpeed), 0, null, 0, 0);    //baudrate 9600
-                connection.controlTransfer(0x40, 0x04, 0x0008, 0, null, 0, 0);    //data bit 8, parity none, stop bit 1, tx off
-                */
-            } else {
-                Thread autoConf = new Thread() {
-
-                    /* (non-Javadoc)
-                     * @see java.lang.Thread#run()
-                     */
-                    @Override
-                    public void run() {
-//                    final byte[] data = { (byte) 0xC0, 0x12, 0x00, 0x00, 0x00, 0x00, 0x08 };
-//                    final ByteBuffer connectionSpeedBuffer = ByteBuffer.wrap(data, 0, 4).order(java.nio.ByteOrder.LITTLE_ENDIAN);
-//                    final byte[] sirfBin2Nmea = SirfUtils.genSirfCommandFromPayload(callingService.getString(R.string.sirf_bin_to_nmea));
-//                    final byte[] datax = new byte[7];
-//                    final ByteBuffer connectionSpeedInfoBuffer = ByteBuffer.wrap(datax,0,7).order(java.nio.ByteOrder.LITTLE_ENDIAN);
-                        try {
-                            // Get the current data rate from the device and transfer it into datax
-                            int res0 = connection.controlTransfer(0xA1, 33, 0, 0, datax, 7, TIMEOUT);
-
-                            // Datax is used in a byte buffer which this now turns into an integer
-                            // and sets how preference speed to that speed
-                            USBGpsManager.this.deviceSpeed = Integer.toString(connectionSpeedInfoBuffer.getInt(0));
-
-                            // logs the bytes we got
-                            debugLog("info connection: " + Arrays.toString(datax));
-                            debugLog("info connection speed: " + USBGpsManager.this.deviceSpeed);
-
-                            Thread.sleep(4000);
-                            debugLog("trying to use speed in range: " + Arrays.toString(speedList));
-                            for (int speed: speedList) {
-                                if (!ready && !closed) {
-                                    // set a new datarate
-                                    USBGpsManager.this.deviceSpeed = Integer.toString(speed);
-                                    debugLog("trying to use speed " + speed);
-                                    debugLog("initializing connection:  " + speed + " baud and 8N1 (0 bits no parity 1 stop bit");
-
-                                    // Put that data rate into a new data byte array
-                                    connectionSpeedBuffer.putInt(0, speed);
-
-                                    // And set the device to that data rate
-                                    int res2 = connection.controlTransfer(0x21, 32, 0, 0, data, 7, TIMEOUT);
-
-                                    if (sirfGps) {
-                                        debugLog("trying to switch from SiRF binaray to NMEA");
-                                        connection.bulkTransfer(endpointOut, sirfBin2Nmea, sirfBin2Nmea.length, TIMEOUT);
-                                    }
-                                    debugLog("data init " + res1 + " " + res2);
-                                    Thread.sleep(4000);
-                                }
-                            }
-                            // And get the current data rate again
-                            res0 = connection.controlTransfer(0xA1, 33, 0, 0, datax, 7, TIMEOUT);
-
-                            debugLog("info connection: " + Arrays.toString(datax));
-                            debugLog("info connection speed: " + connectionSpeedInfoBuffer.getInt(0));
-
-                            if (!closed) {
-                                Thread.sleep(10000);
-                            }
-                        } catch (InterruptedException e) {
-                            if (BuildConfig.DEBUG || debug)
-                                Log.e(LOG_TAG, "autoconf thread interrupted", e);
-                        } finally {
-                            if ((!closed) && (!ready) || (lastRead + 4000 < SystemClock.uptimeMillis())) {
-                                setMockLocationProviderOutOfService();
-                                if (BuildConfig.DEBUG || debug)
-                                    Log.e(LOG_TAG, "Something went wrong in auto config");
-                                // cleanly closing everything...
-                                ConnectedGps.this.close();
-                                USBGpsManager.this.disableIfNeeded();
-                            }
-                        }
-                    }
-
-                };
-                debugLog("trying to find speed");
-                ready = false;
-                autoConf.start();
             }
         }
 
@@ -630,11 +254,15 @@ public class USBGpsManager {
         private long lastRead = 0;
 
         public void run() {
-            try {
-                BufferedReader reader = new BufferedReader(new InputStreamReader(in, "US-ASCII"), 128);
+            if (closed || serialPort == null) {
+                debugLog("ConnectedGps.run(): already closed or no serial port");
+                disableIfNeeded();
+                return;
+            }
 
-                // Sentence to read from the device
-                String s;
+            try {
+                byte[] readBuffer = new byte[1024];
+                StringBuilder lineBuffer = new StringBuilder();
 
                 long now = SystemClock.uptimeMillis();
 
@@ -642,36 +270,73 @@ public class USBGpsManager {
                 // but if we don't get a signal after 45 seconds we can assume the device
                 // is not usable
                 lastRead = now + 45000;
+
+                // Determine if we should use UBX parsing
+                boolean useUbx = "ubx".equals(protocolMode) || "both".equals(protocolMode);
+                boolean useNmea = "nmea".equals(protocolMode) || "both".equals(protocolMode);
+
+                // Set up UBX parser NMEA bridge for mixed mode
+                if (useUbx) {
+                    ubxParser.reset();
+                    ubxParser.setNmeaByteListener(new UbxParser.NmeaByteListener() {
+                        @Override
+                        public void onNmeaSentence(String sentence) {
+                            String s = sentence.trim();
+                            if (!s.isEmpty()) {
+                                if (notifyNmeaSentence(s + "\r\n")) {
+                                    markDataReceived();
+                                }
+                            }
+                        }
+                    });
+                }
+
                 while ((enabled) && (now < lastRead + 4000) && (!closed)) {
 
+                    int bytesRead;
                     try {
-                        s = reader.readLine();
+                        bytesRead = serialPort.read(readBuffer, 1000);
                     } catch (IOException e) {
-                        s = null;
+                        bytesRead = 0;
                     }
 
-                    if (s != null) {
-                        //Log.v(LOG_TAG, "data: "+System.currentTimeMillis()+" "+s);
-                        if (notifyNmeaSentence(s + "\r\n")) {
+                    if (bytesRead > 0) {
+                        if (useUbx) {
+                            // In UBX or mixed mode, feed raw bytes to UBX parser
+                            // The UBX parser handles both UBX frames and NMEA sentences
+                            ubxParser.process(readBuffer, 0, bytesRead);
+
+                            // Mark as ready since we're receiving data
                             ready = true;
-
                             lastRead = SystemClock.uptimeMillis();
+                            resetProblemState();
+                        } else {
+                            // NMEA-only mode: original line-based parsing
+                            String chunk = new String(readBuffer, 0, bytesRead, "US-ASCII");
+                            lineBuffer.append(chunk);
 
-                            if (problemNotified) {
-                                problemNotified = false;
-                                // reset eventual disabling cause
-                                setDisableReason(0);
-                                // connection is good so resetting the number of connection try
-                                debugLog("connection is good so resetting the number of connection retries");
-                                nbRetriesRemaining = maxConnectionRetries;
-                                notificationManager.cancel(R.string.connection_problem_notification_title);
+                            // Extract complete lines
+                            int newlinePos;
+                            while ((newlinePos = lineBuffer.indexOf("\n")) >= 0) {
+                                String line = lineBuffer.substring(0, newlinePos + 1);
+                                lineBuffer.delete(0, newlinePos + 1);
+
+                                // Ensure line ends with \r\n for NMEA parser
+                                String s = line.trim();
+                                if (!s.isEmpty()) {
+                                    if (notifyNmeaSentence(s + "\r\n")) {
+                                        ready = true;
+                                        lastRead = SystemClock.uptimeMillis();
+                                        resetProblemState();
+                                    }
+                                }
                             }
                         }
                     } else {
                         log("data: not ready " + System.currentTimeMillis());
                         SystemClock.sleep(100);
                     }
-//                    SystemClock.sleep(10);
+
                     now = SystemClock.uptimeMillis();
                 }
 
@@ -695,8 +360,24 @@ public class USBGpsManager {
             }
         }
 
+        private void markDataReceived() {
+            ready = true;
+            lastRead = SystemClock.uptimeMillis();
+            resetProblemState();
+        }
+
+        private void resetProblemState() {
+            if (problemNotified) {
+                problemNotified = false;
+                setDisableReason(0);
+                debugLog("connection is good so resetting the number of connection retries");
+                nbRetriesRemaining = maxConnectionRetries;
+                notificationManager.cancel(R.string.connection_problem_notification_title);
+            }
+        }
+
         /**
-         * Write to the connected OutStream.
+         * Write to the connected serial port.
          *
          * @param buffer The bytes to write
          */
@@ -705,9 +386,8 @@ public class USBGpsManager {
                 do {
                     Thread.sleep(100);
                 } while ((enabled) && (!ready) && (!closed));
-                if ((enabled) && (ready) && (!closed)) {
-                    out.write(buffer);
-                    out.flush();
+                if ((enabled) && (ready) && (!closed) && serialPort != null) {
+                    serialPort.write(buffer, 100);
                 }
             } catch (IOException | InterruptedException e) {
                 if (BuildConfig.DEBUG || debug)
@@ -716,7 +396,7 @@ public class USBGpsManager {
         }
 
         /**
-         * Write to the connected OutStream.
+         * Write to the connected serial port.
          *
          * @param buffer The data to write
          */
@@ -725,11 +405,10 @@ public class USBGpsManager {
                 do {
                     Thread.sleep(100);
                 } while ((enabled) && (!ready) && (!closed));
-                if ((enabled) && (ready) && (!closed)) {
-                    out2.print(buffer);
-                    out2.flush();
+                if ((enabled) && (ready) && (!closed) && serialPort != null) {
+                    serialPort.write(buffer.getBytes("US-ASCII"), 100);
                 }
-            } catch (InterruptedException e) {
+            } catch (IOException | InterruptedException e) {
                 if (BuildConfig.DEBUG || debug)
                     Log.e(LOG_TAG, "Exception during write", e);
             }
@@ -739,44 +418,13 @@ public class USBGpsManager {
             ready = false;
             closed = true;
             try {
-                debugLog("closing USB GPS output stream");
-                in.close();
-
+                if (serialPort != null) {
+                    debugLog("closing USB serial port");
+                    serialPort.close();
+                }
             } catch (IOException e) {
                 if (BuildConfig.DEBUG || debug)
-                    Log.e(LOG_TAG, "error while closing GPS NMEA output stream", e);
-
-            } finally {
-                try {
-                    debugLog("closing USB GPS input streams");
-                    out2.close();
-                    out.close();
-
-                } catch (IOException e) {
-                    if (BuildConfig.DEBUG || debug)
-                        Log.e(LOG_TAG, "error while closing GPS input streams", e);
-
-                } finally {
-                    debugLog("releasing usb interface for connection: " + connection);
-
-                    boolean released = false;
-                    if (intf != null) {
-                        released = connection.releaseInterface(intf);
-                    }
-
-                    if (released) {
-                        debugLog("usb interface released for connection: " + connection);
-
-                    } else if (intf != null) {
-                        debugLog("unable to release usb interface for connection: " + connection);
-                    } else {
-                        debugLog("no interface to release");
-                    }
-
-                    debugLog("closing usb connection: " + connection);
-                    connection.close();
-
-                }
+                    Log.e(LOG_TAG, "error while closing USB serial port", e);
             }
         }
     }
@@ -788,6 +436,9 @@ public class USBGpsManager {
     private UsbDevice gpsDev;
 
     private NmeaParser parser;
+    private UbxParser ubxParser;
+    private DeadReckoningManager drManager;
+    private String protocolMode = "nmea"; // "nmea", "ubx", "both"
     private boolean enabled = false;
     private ExecutorService notificationPool;
     private ScheduledExecutorService connectionAndReadingPool;
@@ -834,6 +485,10 @@ public class USBGpsManager {
         this.appContext = callingService.getApplicationContext();
         this.parser = new NmeaParser(10f, this.appContext);
 
+        // Initialize UBX parser and Dead Reckoning manager
+        this.ubxParser = new UbxParser();
+        this.drManager = new DeadReckoningManager(this.appContext);
+
         locationManager = (LocationManager) callingService.getSystemService(Context.LOCATION_SERVICE);
 
         sharedPreferences = PreferenceManager.getDefaultSharedPreferences(callingService);
@@ -849,12 +504,25 @@ public class USBGpsManager {
         defaultDeviceSpeed = callingService.getString(R.string.defaultGpsDeviceSpeed);
         setDeviceSpeed = !deviceSpeed.equals(callingService.getString(R.string.autoGpsDeviceSpeed));
         sirfGps = sharedPreferences.getBoolean(USBGpsProviderService.PREF_SIRF_GPS, false);
+        protocolMode = sharedPreferences.getString(
+                appContext.getString(R.string.pref_ubx_protocol_mode_key), "nmea");
         notificationManager = (NotificationManager) callingService.getSystemService(Context.NOTIFICATION_SERVICE);
         parser.setLocationManager(locationManager);
 
+        // Set up UBX parser listeners
+        setupUbxParser();
+
+        // Set up Dead Reckoning command sender
+        drManager.setCommandSender(new DeadReckoningManager.CommandSender() {
+            @Override
+            public void sendUbxCommand(byte[] data) {
+                USBGpsManager.this.sendUbxCommand(data);
+            }
+        });
+
         Intent stopIntent = new Intent(USBGpsProviderService.ACTION_STOP_GPS_PROVIDER);
 
-        PendingIntent stopPendingIntent = PendingIntent.getService(appContext, 0, stopIntent, PendingIntent.FLAG_CANCEL_CURRENT);
+        PendingIntent stopPendingIntent = PendingIntent.getService(appContext, 0, stopIntent, PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
         connectionProblemNotificationBuilder = new NotificationCompat.Builder(appContext)
                 .setContentIntent(stopPendingIntent)
@@ -862,7 +530,7 @@ public class USBGpsManager {
 
 
         Intent restartIntent = new Intent(USBGpsProviderService.ACTION_START_GPS_PROVIDER);
-        PendingIntent restartPendingIntent = PendingIntent.getService(appContext, 0, restartIntent, PendingIntent.FLAG_CANCEL_CURRENT);
+        PendingIntent restartPendingIntent = PendingIntent.getService(appContext, 0, restartIntent, PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
         serviceStoppedNotificationBuilder = new NotificationCompat.Builder(appContext)
                 .setContentIntent(restartPendingIntent)
@@ -1035,7 +703,7 @@ public class USBGpsManager {
                                     if (gpsDev != null) {
                                         debugLog("GPS device: " + gpsDev.getDeviceName());
 
-                                        PendingIntent permissionIntent = PendingIntent.getBroadcast(callingService, 0, new Intent(ACTION_USB_PERMISSION), 0);
+                                        PendingIntent permissionIntent = PendingIntent.getBroadcast(callingService, 0, new Intent(ACTION_USB_PERMISSION), PendingIntent.FLAG_IMMUTABLE);
                                         UsbDevice device = gpsDev;
 
                                         if (device != null && usbManager.hasPermission(device)) {
@@ -1070,7 +738,11 @@ public class USBGpsManager {
 
                     if (gpsDev != null) {
                         this.enabled = true;
-                        callingService.registerReceiver(permissionAndDetachReceiver, permissionFilter);
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            callingService.registerReceiver(permissionAndDetachReceiver, permissionFilter, Context.RECEIVER_NOT_EXPORTED);
+                        } else {
+                            callingService.registerReceiver(permissionAndDetachReceiver, permissionFilter);
+                        }
 
                         debugLog("USB GPS manager enabled");
 
@@ -1203,7 +875,7 @@ public class USBGpsManager {
                             appContext,
                             0,
                             new Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS),
-                            PendingIntent.FLAG_CANCEL_CURRENT
+                            PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_IMMUTABLE
                         );
 
                 partialServiceStoppedNotification
@@ -1221,7 +893,7 @@ public class USBGpsManager {
                         appContext,
                         0,
                         new Intent(callingService, GpsInfoActivity.class),
-                        PendingIntent.FLAG_CANCEL_CURRENT);
+                        PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
                 USBGpsApplication.setLocationNotAsked();
 
@@ -1281,6 +953,9 @@ public class USBGpsManager {
             notificationPool.execute(closeAndShutdown);
             nmeaListeners.clear();
             disableMockLocationProvider();
+            if (drManager != null) {
+                drManager.release();
+            }
             notificationPool.shutdown();
             callingService.stopSelf();
 
@@ -1747,6 +1422,302 @@ public class USBGpsManager {
         if (isInNmeaMode) {
             enableNMEA(true);
         }
+    }
+
+    // ============================================================
+    // UBX Integration
+    // ============================================================
+
+    /**
+     * Set up the UBX parser with listeners that create Location objects.
+     */
+    private void setupUbxParser() {
+        ubxParser.setUbxListener(new UbxParser.UbxListener() {
+            @Override
+            public void onUbxNavPvt(double lat, double lon, int alt, int altMsl,
+                                     int speed, int bearing, int hAcc,
+                                     int fixType, int numSV, long timeMs, int valid) {
+                if (!enabled) return;
+
+                // Only process valid fixes (fixType 2=2D, 3=3D, 4=GNSS+DR, 5=time only)
+                if (fixType >= 2 && fixType <= 4 && parser.isMockGpsEnabled()) {
+                    Location fix = new Location(parser.getMockLocationProvider());
+                    fix.setLatitude(lat);
+                    fix.setLongitude(lon);
+                    fix.setAltitude(altMsl / 1000.0); // mm to meters
+                    fix.setSpeed(speed / 1000.0f);     // mm/s to m/s
+                    fix.setBearing(bearing / 100000.0f); // 1e-5 degrees to degrees
+                    fix.setAccuracy(hAcc / 1000.0f);   // mm to meters
+                    fix.setTime(timeMs);
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+                        fix.setElapsedRealtimeNanos(SystemClock.elapsedRealtimeNanos());
+                    }
+
+                    Bundle extras = new Bundle();
+                    extras.putInt(NmeaParser.SATELLITE_KEY, numSV);
+                    extras.putLong(NmeaParser.SYSTEM_TIME_FIX, System.currentTimeMillis());
+                    extras.putInt("ubxFixType", fixType);
+                    fix.setExtras(extras);
+
+                    try {
+                        ((USBGpsApplication) appContext).notifyNewLocation(fix);
+                        locationManager.setTestProviderLocation(
+                                parser.getMockLocationProvider(), fix);
+                        debugLog("UBX NAV-PVT fix: " + lat + ", " + lon +
+                                " alt=" + (altMsl / 1000.0) +
+                                " spd=" + (speed / 1000.0) +
+                                " sv=" + numSV);
+                    } catch (SecurityException e) {
+                        if (BuildConfig.DEBUG || debug)
+                            Log.e(LOG_TAG, "SecurityException setting UBX location", e);
+                    } catch (IllegalArgumentException e) {
+                        debugLog("UBX fix incomplete, skipping");
+                    }
+
+                    // Notify sentence to log
+                    String ubxLog = String.format("UBX-NAV-PVT: %.6f,%.6f alt=%.1f spd=%.1f sv=%d fix=%d",
+                            lat, lon, altMsl / 1000.0, speed / 1000.0, numSV, fixType);
+                    ((USBGpsApplication) appContext).notifyNewSentence(ubxLog);
+
+                } else if (fixType == 0 || fixType == 1) {
+                    // No fix or dead reckoning only
+                    if (parser.isMockGpsEnabled()) {
+                        try {
+                            locationManager.setTestProviderStatus(
+                                    parser.getMockLocationProvider(),
+                                    LocationProvider.TEMPORARILY_UNAVAILABLE,
+                                    null, System.currentTimeMillis());
+                        } catch (SecurityException e) {
+                            // ignore
+                        }
+                    }
+                }
+            }
+
+            @Override
+            public void onUbxNavSol(int fixType, int flags, int numSV,
+                                     double ecefX, double ecefY, double ecefZ,
+                                     int pAcc, int week, long timeMs) {
+                debugLog("UBX NAV-SOL: fix=" + fixType + " sv=" + numSV + " pAcc=" + pAcc + "cm");
+            }
+
+            @Override
+            public void onUbxNavStatus(int fixType, int flags, int fixStat,
+                                        int flags2, long ttff, long msss) {
+                debugLog("UBX NAV-STATUS: fix=" + fixType + " ttff=" + ttff + "ms");
+            }
+
+            @Override
+            public void onUbxNavSvInfo(int numCh, int globalFlags, UbxParser.SvInfo[] svInfos) {
+                int usedCount = 0;
+                for (UbxParser.SvInfo sv : svInfos) {
+                    if (sv.isUsed()) usedCount++;
+                }
+                debugLog("UBX NAV-SVINFO: " + numCh + " channels, " + usedCount + " used");
+            }
+
+            @Override
+            public void onUbxNavEkfStatus(int pulses, int period, int gyroMean,
+                                           int temperature, int direction,
+                                           int calibStatus, int pulseScale,
+                                           int gyroBias, int gyroScale) {
+                debugLog("UBX NAV-EKFSTATUS: calib=" + calibStatus + " dir=" + direction);
+                drManager.onEkfStatus(pulses, period, gyroMean, temperature,
+                        direction, calibStatus, pulseScale, gyroBias, gyroScale);
+            }
+        });
+    }
+
+    /**
+     * Send a raw UBX command to the receiver.
+     *
+     * @param data complete UBX frame bytes
+     */
+    public void sendUbxCommand(final byte[] data) {
+        if (connectedGps != null && enabled) {
+            debugLog("Sending UBX command: " + data.length + " bytes");
+            connectedGps.write(data);
+        }
+    }
+
+    /**
+     * Configure the measurement rate via UBX-CFG-RATE.
+     *
+     * @param rateMs measurement rate in milliseconds
+     */
+    public void configureRate(final int rateMs) {
+        debugLog("Configuring UBX rate: " + rateMs + "ms");
+        if (connectedGps != null && enabled) {
+            notificationPool.execute(new Runnable() {
+                @Override
+                public void run() {
+                    waitForReady();
+                    sendUbxCommand(UbxCommands.cfgRate(rateMs));
+                }
+            });
+        }
+    }
+
+    /**
+     * Configure the dynamic model via UBX-CFG-NAV5.
+     *
+     * @param dynModel one of UbxCommands.DYN_MODEL_* constants
+     */
+    public void configureDynamicModel(final int dynModel) {
+        debugLog("Configuring UBX dynamic model: " + dynModel);
+        if (connectedGps != null && enabled) {
+            notificationPool.execute(new Runnable() {
+                @Override
+                public void run() {
+                    waitForReady();
+                    sendUbxCommand(UbxCommands.cfgNav5DynModel(dynModel));
+                }
+            });
+        }
+    }
+
+    /**
+     * Enable or disable SBAS via UBX-CFG-SBAS.
+     *
+     * @param enable true to enable SBAS
+     */
+    public void configureUbxSbas(final boolean enable) {
+        debugLog("Configuring UBX SBAS: " + enable);
+        if (connectedGps != null && enabled) {
+            notificationPool.execute(new Runnable() {
+                @Override
+                public void run() {
+                    waitForReady();
+                    sendUbxCommand(UbxCommands.cfgSbas(enable));
+                }
+            });
+        }
+    }
+
+    /**
+     * Configure protocol mode (NMEA only, UBX only, or both).
+     *
+     * @param mode "nmea", "ubx", or "both"
+     */
+    public void configureProtocolMode(final String mode) {
+        debugLog("Configuring protocol mode: " + mode);
+        this.protocolMode = mode;
+
+        if (connectedGps != null && enabled) {
+            notificationPool.execute(new Runnable() {
+                @Override
+                public void run() {
+                    waitForReady();
+
+                    int baudRate = Integer.parseInt(
+                            setDeviceSpeed ? deviceSpeed : defaultDeviceSpeed);
+
+                    switch (mode) {
+                        case "ubx":
+                            // UBX only: enable UBX output, disable NMEA output
+                            sendUbxCommand(UbxCommands.cfgPrtUart1(baudRate, true, false, true, false));
+                            // Enable NAV-PVT at every solution
+                            SystemClock.sleep(200);
+                            sendUbxCommand(UbxCommands.enableNavPvt(1));
+                            SystemClock.sleep(100);
+                            sendUbxCommand(UbxCommands.enableNavStatus(1));
+                            SystemClock.sleep(100);
+                            sendUbxCommand(UbxCommands.enableNavSvInfo(5));
+                            break;
+
+                        case "both":
+                            // Both protocols
+                            sendUbxCommand(UbxCommands.cfgPrtUart1(baudRate, true, true, true, true));
+                            SystemClock.sleep(200);
+                            sendUbxCommand(UbxCommands.enableNavPvt(1));
+                            break;
+
+                        case "nmea":
+                        default:
+                            // NMEA only: enable NMEA output, disable UBX output
+                            sendUbxCommand(UbxCommands.cfgPrtUart1(baudRate, false, true, false, true));
+                            break;
+                    }
+                }
+            });
+        }
+    }
+
+    /**
+     * Enable or disable Dead Reckoning.
+     *
+     * @param enable true to enable DR
+     */
+    public void configureDeadReckoning(final boolean enable) {
+        debugLog("Configuring Dead Reckoning: " + enable);
+        if (enable) {
+            drManager.enableDR();
+        } else {
+            drManager.disableDR();
+        }
+    }
+
+    /**
+     * Save current configuration to receiver flash.
+     */
+    public void saveUbxConfig() {
+        debugLog("Saving UBX config to flash");
+        if (connectedGps != null && enabled) {
+            notificationPool.execute(new Runnable() {
+                @Override
+                public void run() {
+                    waitForReady();
+                    sendUbxCommand(UbxCommands.saveConfig());
+                }
+            });
+        }
+    }
+
+    /**
+     * Reset the receiver.
+     *
+     * @param type "hot", "warm", or "cold"
+     */
+    public void resetReceiver(final String type) {
+        debugLog("Resetting receiver: " + type);
+        if (connectedGps != null && enabled) {
+            notificationPool.execute(new Runnable() {
+                @Override
+                public void run() {
+                    waitForReady();
+                    switch (type) {
+                        case "warm":
+                            sendUbxCommand(UbxCommands.warmStart());
+                            break;
+                        case "cold":
+                            sendUbxCommand(UbxCommands.coldStart());
+                            break;
+                        case "hot":
+                        default:
+                            sendUbxCommand(UbxCommands.hotStart());
+                            break;
+                    }
+                }
+            });
+        }
+    }
+
+    /**
+     * Wait until the connected GPS is ready for commands.
+     */
+    private void waitForReady() {
+        while ((enabled) && ((!connected) || (connectedGps == null) || (!connectedGps.isReady()))) {
+            debugLog("waiting for GPS to be ready for UBX commands");
+            SystemClock.sleep(500);
+        }
+    }
+
+    /**
+     * Get the Dead Reckoning manager.
+     */
+    public DeadReckoningManager getDeadReckoningManager() {
+        return drManager;
     }
 
     private void log(String message) {

@@ -5,20 +5,23 @@ import android.app.ActivityManager;
 import android.app.AlertDialog;
 import android.app.NotificationManager;
 import android.content.ActivityNotFoundException;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
-import android.preference.PreferenceManager;
+import android.os.IBinder;
 import android.provider.Settings;
-import android.support.annotation.NonNull;
-import android.support.v4.content.ContextCompat;
-import android.support.v7.app.ActionBar;
-import android.support.v7.app.AppCompatActivity;
-import android.support.v7.preference.PreferenceFragmentCompat;
+import androidx.preference.PreferenceManager;
+import androidx.annotation.NonNull;
+import androidx.core.content.ContextCompat;
+import androidx.appcompat.app.ActionBar;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.preference.PreferenceFragmentCompat;
 import android.view.MenuItem;
 
 import org.broeuschmeul.android.gps.usb.provider.USBGpsApplication;
@@ -44,7 +47,6 @@ public abstract class USBGpsBaseActivity extends AppCompatActivity implements
 
     private SharedPreferences sharedPreferences;
     private NotificationManager notificationManager;
-    private ActivityManager activityManager;
 
     private boolean shouldInitialise = true;
 
@@ -53,6 +55,7 @@ public abstract class USBGpsBaseActivity extends AppCompatActivity implements
 
     private static final int LOCATION_REQUEST = 238472383;
     private static final int STORAGE_REQUEST = 8972842;
+    private static final int NOTIFICATION_REQUEST = 1001;
 
     private boolean homeAsUp = false;
 
@@ -63,7 +66,6 @@ public abstract class USBGpsBaseActivity extends AppCompatActivity implements
         super.onCreate(savedInstanceState);
         sharedPreferences = PreferenceManager.getDefaultSharedPreferences(this);
         notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        activityManager = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
 
         if (savedInstanceState != null) {
             shouldInitialise = false;
@@ -75,6 +77,14 @@ public abstract class USBGpsBaseActivity extends AppCompatActivity implements
                 USBGpsApplication.setLocationAsked();
                 requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION},
                         LOCATION_REQUEST);
+            }
+        }
+
+        // Request POST_NOTIFICATIONS permission on API 33+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (!hasPermission(Manifest.permission.POST_NOTIFICATIONS)) {
+                requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                        NOTIFICATION_REQUEST);
             }
         }
 
@@ -210,6 +220,8 @@ public abstract class USBGpsBaseActivity extends AppCompatActivity implements
     public void onRequestPermissionsResult(int requestCode,
                                            @NonNull String[] permissions,
                                            @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+
         if (requestCode == LOCATION_REQUEST) {
             if (hasPermission(permissions[0])) {
                 if (tryingToStart) {
@@ -217,7 +229,11 @@ public abstract class USBGpsBaseActivity extends AppCompatActivity implements
 
                     Intent serviceIntent = new Intent(this, USBGpsProviderService.class);
                     serviceIntent.setAction(USBGpsProviderService.ACTION_START_GPS_PROVIDER);
-                    startService(serviceIntent);
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        startForegroundService(serviceIntent);
+                    } else {
+                        startService(serviceIntent);
+                    }
                 }
 
             } else {
@@ -254,20 +270,18 @@ public abstract class USBGpsBaseActivity extends AppCompatActivity implements
                         .show();
 
             }
+        } else if (requestCode == NOTIFICATION_REQUEST) {
+            // Notification permission result - no action needed, notifications will just be silent
         }
     }
 
     /**
-     * If the service is killed then the shared preference for the service is never updated.
-     * This checks if the service is running from the running preferences list
+     * Checks if the service is running using ServiceConnection (replaces deprecated getRunningServices).
      */
     public boolean isServiceRunning() {
-        for (ActivityManager.RunningServiceInfo service: activityManager.getRunningServices(Integer.MAX_VALUE)) {
-            if (USBGpsProviderService.class.getName().equals(service.service.getClassName())) {
-                return true;
-            }
-        }
-        return false;
+        // Use the preference value as primary indicator
+        // The preference is set to false when the service stops
+        return sharedPreferences.getBoolean(USBGpsProviderService.PREF_START_GPS_PROVIDER, false);
     }
 
     /**
@@ -286,7 +300,11 @@ public abstract class USBGpsBaseActivity extends AppCompatActivity implements
                         if (!isServiceRunning()) {
                             Intent serviceIntent = new Intent(this, USBGpsProviderService.class);
                             serviceIntent.setAction(USBGpsProviderService.ACTION_START_GPS_PROVIDER);
-                            startService(serviceIntent);
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                startForegroundService(serviceIntent);
+                            } else {
+                                startService(serviceIntent);
+                            }
                         }
 
 
@@ -316,7 +334,16 @@ public abstract class USBGpsBaseActivity extends AppCompatActivity implements
                 boolean val = sharedPreferences.getBoolean(key, false);
 
                 if (val) {
-                    if (!hasPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
+                    // On API 33+ we don't need WRITE_EXTERNAL_STORAGE for app-specific directories
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        // No storage permission needed on Android 13+
+                        if (sharedPreferences.getBoolean(
+                                USBGpsProviderService.PREF_START_GPS_PROVIDER, false)) {
+                            Intent serviceIntent = new Intent(this, USBGpsProviderService.class);
+                            serviceIntent.setAction(USBGpsProviderService.ACTION_START_TRACK_RECORDING);
+                            startService(serviceIntent);
+                        }
+                    } else if (!hasPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                             requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},
                                     STORAGE_REQUEST);
@@ -374,14 +401,14 @@ public abstract class USBGpsBaseActivity extends AppCompatActivity implements
     @Override
     public void onBackPressed() {
         // this if statement is necessary to navigate through nested and main fragments
-        if (getFragmentManager().getBackStackEntryCount() == 0) {
+        if (getSupportFragmentManager().getBackStackEntryCount() == 0) {
             super.onBackPressed();
         } else {
             ActionBar actionBar = getSupportActionBar();
             if (actionBar != null) {
                 actionBar.setDisplayHomeAsUpEnabled(homeAsUp);
             }
-            getFragmentManager().popBackStack();
+            getSupportFragmentManager().popBackStack();
         }
     }
 

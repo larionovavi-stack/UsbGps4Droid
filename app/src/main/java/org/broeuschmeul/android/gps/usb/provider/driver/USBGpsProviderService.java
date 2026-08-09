@@ -3,19 +3,19 @@
  * Copyright (C) 2010, 2011, 2012 Herbert von Broeuschmeul
  * Copyright (C) 2010, 2011, 2012 BluetoothGPS4Droid Project
  * Copyright (C) 2011, 2012 UsbGPS4Droid Project
- * 
+ *
  * This file is part of UsbGPS4Droid.
  *
  * UsbGPS4Droid is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- * 
+ *
  * UsbGPS4Droid is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- * 
+ *
  *  You should have received a copy of the GNU General Public License
  *  along with UsbGPS4Droid. If not, see <http://www.gnu.org/licenses/>.
  */
@@ -43,18 +43,20 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.pm.ServiceInfo;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.IBinder;
 import android.preference.PreferenceManager;
-import android.support.v4.content.ContextCompat;
+import androidx.core.content.ContextCompat;
 import android.util.Log;
 import android.widget.Toast;
-import android.support.v4.app.NotificationCompat;
+import androidx.core.app.NotificationCompat;
 
 import org.broeuschmeul.android.gps.usb.provider.BuildConfig;
 import org.broeuschmeul.android.gps.usb.provider.R;
@@ -81,6 +83,19 @@ public class USBGpsProviderService extends Service implements USBGpsManager.Nmea
             "org.broeuschmeul.android.gps.usb.provider.action.CONFIGURE_SIRF_GPS";
     public static final String ACTION_ENABLE_SIRF_GPS =
             "org.broeuschmeul.android.gps.usb.provider.action.ENABLE_SIRF_GPS";
+    public static final String ACTION_UBX_CONFIGURE =
+            "org.broeuschmeul.android.gps.usb.provider.action.UBX_CONFIGURE";
+    public static final String ACTION_UBX_SAVE_CONFIG =
+            "org.broeuschmeul.android.gps.usb.provider.action.UBX_SAVE_CONFIG";
+    public static final String ACTION_UBX_RESET_RECEIVER =
+            "org.broeuschmeul.android.gps.usb.provider.action.UBX_RESET_RECEIVER";
+
+    public static final String EXTRA_UBX_PROTOCOL_MODE = "ubxProtocolMode";
+    public static final String EXTRA_UBX_RATE_MS = "ubxRateMs";
+    public static final String EXTRA_UBX_DYN_MODEL = "ubxDynModel";
+    public static final String EXTRA_UBX_SBAS = "ubxSbas";
+    public static final String EXTRA_UBX_DEAD_RECKONING = "ubxDeadReckoning";
+    public static final String EXTRA_UBX_RESET_TYPE = "ubxResetType";
 
     public static final String PREF_START_GPS_PROVIDER = "startGps";
     public static final String PREF_START_ON_BOOT = "startOnBoot";
@@ -144,10 +159,13 @@ public class USBGpsProviderService extends Service implements USBGpsManager.Nmea
                     @Override
                     public void run() {
                         if (BuildConfig.DEBUG) Log.d(LOG_TAG, "Boot start");
-                        context.startService(
-                                new Intent(context, USBGpsProviderService.class)
-                                        .setAction(ACTION_START_GPS_PROVIDER)
-                        );
+                        Intent serviceIntent = new Intent(context, USBGpsProviderService.class)
+                                .setAction(ACTION_START_GPS_PROVIDER);
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            context.startForegroundService(serviceIntent);
+                        } else {
+                            context.startService(serviceIntent);
+                        }
                     }
                 }, 2000);
             }
@@ -203,7 +221,7 @@ public class USBGpsProviderService extends Service implements USBGpsManager.Nmea
                                     this,
                                     0,
                                     new Intent(this, GpsInfoActivity.class),
-                                    PendingIntent.FLAG_CANCEL_CURRENT
+                                    PendingIntent.FLAG_CANCEL_CURRENT | PendingIntent.FLAG_IMMUTABLE
                             );
 
                     sharedPreferences
@@ -236,7 +254,13 @@ public class USBGpsProviderService extends Service implements USBGpsManager.Nmea
                             .setContentText(getString(R.string.foreground_gps_provider_started_notification))
                             .build();
 
-                    startForeground(R.string.foreground_gps_provider_started_notification, notification);
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                        startForeground(R.string.foreground_gps_provider_started_notification,
+                                notification,
+                                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION);
+                    } else {
+                        startForeground(R.string.foreground_gps_provider_started_notification, notification);
+                    }
 
                     showToast(R.string.msg_gps_provider_started);
 
@@ -285,6 +309,39 @@ public class USBGpsProviderService extends Service implements USBGpsManager.Nmea
                     gpsManager.enableSirfConfig(sharedPreferences);
                 }
             }
+
+        } else if (ACTION_UBX_CONFIGURE.equals(intent.getAction())) {
+            if (gpsManager != null) {
+                Bundle extras = intent.getExtras();
+                if (extras != null) {
+                    if (extras.containsKey(EXTRA_UBX_PROTOCOL_MODE)) {
+                        gpsManager.configureProtocolMode(extras.getString(EXTRA_UBX_PROTOCOL_MODE));
+                    }
+                    if (extras.containsKey(EXTRA_UBX_RATE_MS)) {
+                        gpsManager.configureRate(extras.getInt(EXTRA_UBX_RATE_MS));
+                    }
+                    if (extras.containsKey(EXTRA_UBX_DYN_MODEL)) {
+                        gpsManager.configureDynamicModel(extras.getInt(EXTRA_UBX_DYN_MODEL));
+                    }
+                    if (extras.containsKey(EXTRA_UBX_SBAS)) {
+                        gpsManager.configureUbxSbas(extras.getBoolean(EXTRA_UBX_SBAS));
+                    }
+                    if (extras.containsKey(EXTRA_UBX_DEAD_RECKONING)) {
+                        gpsManager.configureDeadReckoning(extras.getBoolean(EXTRA_UBX_DEAD_RECKONING));
+                    }
+                }
+            }
+
+        } else if (ACTION_UBX_SAVE_CONFIG.equals(intent.getAction())) {
+            if (gpsManager != null) {
+                gpsManager.saveUbxConfig();
+            }
+
+        } else if (ACTION_UBX_RESET_RECEIVER.equals(intent.getAction())) {
+            if (gpsManager != null) {
+                String resetType = intent.getStringExtra(EXTRA_UBX_RESET_TYPE);
+                gpsManager.resetReceiver(resetType != null ? resetType : "hot");
+            }
         }
         return Service.START_NOT_STICKY;
     }
@@ -330,7 +387,16 @@ public class USBGpsProviderService extends Service implements USBGpsManager.Nmea
         SharedPreferences.Editor edit = sharedPreferences.edit();
         if (trackFile == null) {
             if (gpsManager != null) {
-                if (hasPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
+                // On API 33+ we don't need WRITE_EXTERNAL_STORAGE for app-specific directories
+                boolean hasStorageAccess;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    // On Android 13+, app-specific directories don't need storage permission
+                    hasStorageAccess = true;
+                } else {
+                    hasStorageAccess = hasPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE);
+                }
+
+                if (hasStorageAccess) {
                     beginTrack();
                     gpsManager.addNmeaListener(this);
                     if (!sharedPreferences.getBoolean(PREF_TRACK_RECORDING, false)) {
@@ -374,8 +440,20 @@ public class USBGpsProviderService extends Service implements USBGpsManager.Nmea
         SimpleDateFormat fmt = new SimpleDateFormat("_yyyy-MM-dd_HH-mm-ss'.nmea'");
 
         SharedPreferences sharedPreferences = PreferenceManager.getDefaultSharedPreferences(this);
-        String trackDirName = sharedPreferences.getString(PREF_TRACK_FILE_DIR, this.getString(R.string.defaultTrackFileDirectory));
-        String trackFilePrefix = sharedPreferences.getString(PREF_TRACK_FILE_PREFIX, this.getString(R.string.defaultTrackFilePrefix));
+
+        String trackDirName;
+        String trackFilePrefix;
+
+        // On API 33+, use app-specific external directory instead of /sdcard/
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            File externalDir = getExternalFilesDir(null);
+            trackDirName = (externalDir != null) ? externalDir.getAbsolutePath() + "/nmea" :
+                    sharedPreferences.getString(PREF_TRACK_FILE_DIR, this.getString(R.string.defaultTrackFileDirectory));
+        } else {
+            trackDirName = sharedPreferences.getString(PREF_TRACK_FILE_DIR, this.getString(R.string.defaultTrackFileDirectory));
+        }
+
+        trackFilePrefix = sharedPreferences.getString(PREF_TRACK_FILE_PREFIX, this.getString(R.string.defaultTrackFilePrefix));
         trackFile = new File(trackDirName, trackFilePrefix + fmt.format(new Date()));
         log("Writing the prelude of the NMEA file: " + trackFile.getAbsolutePath());
         File trackDir = trackFile.getParentFile();
