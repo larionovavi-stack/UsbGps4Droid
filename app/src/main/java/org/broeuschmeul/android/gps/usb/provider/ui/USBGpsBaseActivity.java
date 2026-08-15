@@ -297,14 +297,12 @@ public abstract class USBGpsBaseActivity extends AppCompatActivity implements
 
                     // If we have location permission then we can start the service
                     if (hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) {
-                        if (!isServiceRunning()) {
-                            Intent serviceIntent = new Intent(this, USBGpsProviderService.class);
-                            serviceIntent.setAction(USBGpsProviderService.ACTION_START_GPS_PROVIDER);
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                startForegroundService(serviceIntent);
-                            } else {
-                                startService(serviceIntent);
-                            }
+                        Intent serviceIntent = new Intent(this, USBGpsProviderService.class);
+                        serviceIntent.setAction(USBGpsProviderService.ACTION_START_GPS_PROVIDER);
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            startForegroundService(serviceIntent);
+                        } else {
+                            startService(serviceIntent);
                         }
 
 
@@ -321,11 +319,9 @@ public abstract class USBGpsBaseActivity extends AppCompatActivity implements
                     // Will show a stop dialog if needed
                     showStopDialog();
 
-                    if (isServiceRunning()) {
-                        Intent serviceIntent = new Intent(this, USBGpsProviderService.class);
-                        serviceIntent.setAction(USBGpsProviderService.ACTION_STOP_GPS_PROVIDER);
-                        startService(serviceIntent);
-                    }
+                    Intent serviceIntent = new Intent(this, USBGpsProviderService.class);
+                    serviceIntent.setAction(USBGpsProviderService.ACTION_STOP_GPS_PROVIDER);
+                    startService(serviceIntent);
                 }
 
                 break;

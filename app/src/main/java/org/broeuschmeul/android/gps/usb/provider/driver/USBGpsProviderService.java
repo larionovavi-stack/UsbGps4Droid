@@ -197,10 +197,33 @@ public class USBGpsProviderService extends Service implements USBGpsManager.Nmea
                 )
         );
 
-        log("prefs device addr: " + vendorId + " - " + productId);
+        Log.w("UsbGpsService", "onStartCommand action=" + (intent != null ? intent.getAction() : "null") +
+                " VID=" + vendorId + " PID=" + productId);
 
         if (ACTION_START_GPS_PROVIDER.equals(intent.getAction())) {
+            // Must call startForeground() immediately to avoid ForegroundServiceDidNotStartInTimeException
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                notificationManager.createNotificationChannel(
+                        new NotificationChannel(
+                                NOTIFICATION_CHANNEL_ID,
+                                getString(R.string.app_name),
+                                NotificationManager.IMPORTANCE_LOW
+                        )
+                );
+                Notification earlyNotification = new NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
+                        .setContentTitle(getString(R.string.foreground_service_started_notification_title))
+                        .setSmallIcon(R.drawable.ic_stat_notify)
+                        .build();
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    startForeground(R.string.foreground_gps_provider_started_notification,
+                            earlyNotification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION);
+                } else {
+                    startForeground(R.string.foreground_gps_provider_started_notification, earlyNotification);
+                }
+            }
+
             if (gpsManager == null) {
+                Log.w("UsbGpsService", "Creating new USBGpsManager");
                 String mockProvider = LocationManager.GPS_PROVIDER;
                 if (!sharedPreferences.getBoolean(PREF_REPLACE_STD_GPS, true)) {
                     mockProvider = sharedPreferences.getString(PREF_MOCK_GPS_NAME, getString(R.string.defaultMockGpsName));

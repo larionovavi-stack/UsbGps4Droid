@@ -222,7 +222,11 @@ public class USBGpsManager {
                     UsbSerialPort.PARITY_NONE
                 );
 
-                debugLog("Serial port opened at " + baudRate + " baud, 8N1");
+                // Enable DTR/RTS - required by some USB-serial chips to start data flow
+                try { serialPort.setDTR(true); } catch (Exception ignored) {}
+                try { serialPort.setRTS(true); } catch (Exception ignored) {}
+
+                debugLog("Serial port opened at " + baudRate + " baud, 8N1, DTR/RTS on");
 
             } catch (IOException e) {
                 if (BuildConfig.DEBUG || debug)
@@ -291,16 +295,20 @@ public class USBGpsManager {
                     });
                 }
 
-                while ((enabled) && (now < lastRead + 4000) && (!closed)) {
+                while ((enabled) && (now < lastRead + 10000) && (!closed)) {
 
                     int bytesRead;
                     try {
-                        bytesRead = serialPort.read(readBuffer, 1000);
+                        bytesRead = serialPort.read(readBuffer, 2000);
                     } catch (IOException e) {
                         bytesRead = 0;
+                        debugLog("IOException during read: " + e.getMessage());
                     }
 
                     if (bytesRead > 0) {
+                        // Any data received = keep alive timer reset
+                        lastRead = SystemClock.uptimeMillis();
+
                         if (useUbx) {
                             // In UBX or mixed mode, feed raw bytes to UBX parser
                             // The UBX parser handles both UBX frames and NMEA sentences
@@ -308,7 +316,6 @@ public class USBGpsManager {
 
                             // Mark as ready since we're receiving data
                             ready = true;
-                            lastRead = SystemClock.uptimeMillis();
                             resetProblemState();
                         } else {
                             // NMEA-only mode: original line-based parsing
@@ -326,21 +333,20 @@ public class USBGpsManager {
                                 if (!s.isEmpty()) {
                                     if (notifyNmeaSentence(s + "\r\n")) {
                                         ready = true;
-                                        lastRead = SystemClock.uptimeMillis();
                                         resetProblemState();
                                     }
                                 }
                             }
                         }
                     } else {
-                        log("data: not ready " + System.currentTimeMillis());
-                        SystemClock.sleep(100);
+                        debugLog("data: not ready, waiting...");
+                        SystemClock.sleep(200);
                     }
 
                     now = SystemClock.uptimeMillis();
                 }
 
-                if (now > lastRead + 4000) {
+                if (now > lastRead + 10000) {
                     if (BuildConfig.DEBUG || debug)
                         Log.e(LOG_TAG, "Read timeout in read thread");
                 } else if (closed) {
@@ -599,7 +605,9 @@ public class USBGpsManager {
      * @param device GPS device
      */
     private void openConnection(UsbDevice device) {
-        if (!getDeviceFromAttached().equals(device)) {
+        UsbDevice attached = getDeviceFromAttached();
+        if (attached == null || !attached.equals(device)) {
+            debugLog("Device not found in attached list, skipping connection");
             return;
         }
 
@@ -635,16 +643,38 @@ public class USBGpsManager {
         }
     }
 
+    // Known USB-serial chip vendor IDs
+    private static final int[] KNOWN_SERIAL_VIDS = {
+        5446,  // 0x1546 u-blox AG
+        1027,  // 0x0403 FTDI
+        4292,  // 0x10C4 Silicon Labs CP210x
+        1659,  // 0x067B Prolific PL2303
+        6790,  // 0x1A86 QinHeng CH340/CH341
+        9025,  // 0x2341 Arduino/CDC
+    };
+
     private UsbDevice getDeviceFromAttached() {
         debugLog("Checking all connected devices");
+
+        // First try exact VID+PID match (user-configured)
         for (UsbDevice connectedDevice : usbManager.getDeviceList().values()) {
-
-            debugLog("Checking device: " + connectedDevice.getProductId() + " " + connectedDevice.getVendorId());
-
-            if (connectedDevice.getVendorId() == gpsVendorId & connectedDevice.getProductId() == gpsProductId) {
-                debugLog("Found correct device");
-
+            debugLog("Checking device: VID=" + connectedDevice.getVendorId() + " PID=" + connectedDevice.getProductId());
+            if (connectedDevice.getVendorId() == gpsVendorId && connectedDevice.getProductId() == gpsProductId) {
+                debugLog("Found exact match device");
                 return connectedDevice;
+            }
+        }
+
+        // Fallback: match any known USB-serial chip by VID only
+        for (UsbDevice connectedDevice : usbManager.getDeviceList().values()) {
+            for (int vid : KNOWN_SERIAL_VIDS) {
+                if (connectedDevice.getVendorId() == vid) {
+                    debugLog("Found device by known VID: " + vid + " PID: " + connectedDevice.getProductId());
+                    // Update stored IDs so subsequent lookups are fast
+                    gpsVendorId = connectedDevice.getVendorId();
+                    gpsProductId = connectedDevice.getProductId();
+                    return connectedDevice;
+                }
             }
         }
 
@@ -1138,10 +1168,8 @@ public class USBGpsManager {
 
             } catch (SecurityException e) {
                 if (BuildConfig.DEBUG || debug)
-                    Log.e(LOG_TAG, "error while parsing NMEA sentence: " + nmeaSentence, e);
-                // a priori Mock Location is disabled
-                sentence = null;
-                disable(R.string.msg_mock_location_disabled);
+                    Log.e(LOG_TAG, "Mock location permission issue: " + nmeaSentence, e);
+                // Continue without mock location - data still shown in UI
             } catch (Exception e) {
                 if (BuildConfig.DEBUG || debug) {
                     Log.e(LOG_TAG, "Sentence not parsable");
@@ -1721,10 +1749,10 @@ public class USBGpsManager {
     }
 
     private void log(String message) {
-        if (BuildConfig.DEBUG) Log.d(LOG_TAG, message);
+        Log.w(LOG_TAG, message);
     }
 
     private void debugLog(String message) {
-        if (BuildConfig.DEBUG || debug) Log.d(LOG_TAG, message);
+        Log.w(LOG_TAG, message);
     }
 }

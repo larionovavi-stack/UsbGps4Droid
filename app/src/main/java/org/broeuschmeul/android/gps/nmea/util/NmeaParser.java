@@ -162,8 +162,9 @@ public class NmeaParser {
                 }
             }
         } catch (SecurityException e) {
-            logError("Error while enabling Mock Locations Provider", e);
-            disableMockLocationProvider();
+            logError("Mock location permission not granted, running without mock provider", e);
+            mockGpsEnabled = false;
+            mockLocationProvider = gpsName;
 
         }
     }
@@ -250,7 +251,7 @@ public class NmeaParser {
      * @param fix the location
      * @throws SecurityException
      */
-    private void notifyFix(Location fix) throws SecurityException {
+    private void notifyFix(Location fix) {
         fixTime = null;
         hasGGA = false;
         hasRMC = false;
@@ -267,16 +268,20 @@ public class NmeaParser {
 
                 try {
                     lm.setTestProviderLocation(mockLocationProvider, fix);
+                    log("New Fix notified to Location Manager: " + mockLocationProvider);
+
+                } catch (SecurityException e) {
+                    log("Mock location permission lost, disabling mock provider");
+                    mockGpsEnabled = false;
 
                 } catch (IllegalArgumentException e) {
                     log("Tried to notify a fix that was incomplete");
                     log("Accuracy = " + Float.toString(fix.getAccuracy()));
 
                 }
-                log("New Fix notified to Location Manager: " + mockLocationProvider);
 
             } else {
-                log("Fix could not be notified, no locationManager");
+                log("Fix displayed locally (mock provider not active)");
 
             }
             this.fix = null;
