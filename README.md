@@ -1,116 +1,163 @@
 <img align="right" alt="App icon" src="app-icon.png" height="115px">
 
-# UsbGps4Droid - A USB GPS provider for Android 
+# UsbGps4Droid — a USB GPS provider for Android
 
-UsbGps4Droid is a USB GPS provider application for the Android operating system,
-providing GPS support for devices down to android 4.0
+Feed your Android device with position data from an external USB GPS receiver, and make
+every app that asks for location — maps, navigation, tracking — use it as if it were a
+built-in GPS.
 
-[Download latest release](../../releases)
+**[⬇ Download the latest APK (v3.0.1)](../../releases/latest)** · Android 7.0+ · `GPL-3.0`
 
-## About
-The application provides location updates to Android which allows devices without 
-an internal GPS to still use applications which require GPS (Google Maps navigation).
+> ### This is a maintained continuation of the project
+> The upstream repository [`freshollie/UsbGps4Droid`](https://github.com/freshollie/UsbGps4Droid)
+> has had no commits since **September 2020** and no longer runs on modern Android.
+> This fork brings it back: Android 14+ support, the u-blox UBX binary protocol, Dead Reckoning,
+> and a rewritten USB layer. The changes were offered upstream as
+> [PR #46](https://github.com/freshollie/UsbGps4Droid/pull/46); it remains unreviewed.
 
-I use this USB Gps with my Android Tablet Headunit, because the internal GPS does 
-not work reliably. I have a [main controller](https://github.com/freshollie/AndroidHeadunitController/) 
-which automatically starts this application's background service when my car starts
+## Why you might need this
 
-The application is designed to work with any SiRF USB GPS device, however it has been 
-tested as working with [GlobalSat BU-353-S4](http://usglobalsat.com/p-688-bu-353-s4.aspx) and
-[a device based on the UBLOX LEA-M8P chip](../../issues/7).
+Many devices have no GPS chip at all, or one that is unusable — Wi-Fi-only tablets, Chinese
+car head units, industrial terminals, Raspberry-Pi-class boards running Android. An external
+USB receiver is cheap, far more accurate, and has a real antenna. This app takes its output
+and injects it into Android as a mock location provider, so no other app needs to know or care.
 
 ## Features
-- Android 6.0+ Permission handling
-- Ability to pick which USB device is the GPS
-- Automatic start on reboot
-- User interface with readings from the USB GPS and a log showing NMEA data coming from the GPS
-- Abilty to sync android device time with GPS time (Requires root)
-- Support for any SiRF USB GPS device
+
+- **NMEA 0183** and **UBX** (u-blox binary) protocols — pick either, or run both at once
+- **Dead Reckoning** for u-blox LEA-6R: position keeps updating in tunnels and parking garages
+- **Receiver configuration from the app** — update rate, dynamic model, SBAS, save/reset to
+  the receiver's own flash
+- Live view of position, speed, altitude, fix type, satellites in view, and a raw NMEA log
+- **Automatic start on boot**, foreground service with a persistent notification
+- Choose which USB device to use when several are attached
+- Sync the Android clock to GPS time (requires root)
+
+## Supported hardware
+
+Any USB-serial adapter handled by
+[usb-serial-for-android](https://github.com/mik3y/usb-serial-for-android) 3.7.3 should work.
+Recognised out of the box:
+
+| Chip / vendor | USB VID |
+|---|---|
+| FTDI (FT232, FT231…) | `0x0403` |
+| Prolific PL2303 | `0x067B` |
+| Silicon Labs CP210x | `0x10C4` |
+| **u-blox** (direct USB) | `0x1546` |
+| QinHeng CH340 / CH341 | `0x1A86` |
+| Arduino-based receivers | `0x2341` |
+
+If your receiver is not detected, the app also falls back to probing by known USB-serial
+vendor IDs. Receivers speaking plain NMEA over any of these bridges are supported regardless
+of the GNSS chip inside — SiRF, MediaTek, u-blox and others.
+
+## Tested devices
+
+| Device | Android | Receiver | Result |
+|---|---|---|---|
+| Xiaomi (HyperOS) | 14 | u-blox LEA-6R via USB-OTG | ✅ works |
+| Car head unit | 8 | u-blox LEA-6R | ✅ works — see mock-location note below |
+| PX5 car head unit | 10 | u-blox LEA-6R | ❌ no data — **under investigation** |
+
+**Please report your own results** — device, Android version, receiver, and whether it worked.
+This table is the most useful thing this project can offer, and it only grows if people write in.
 
 ## Usage
 
-### USB Permissions Popup
-**Unless your ROM is modified then Android will ask permission to use your USB GPS device 
-everytime you reconnect it**
+### 1. Select the app as the mock location provider
 
-If your device is rooted, then you can follow [this tutorial](https://stackoverflow.com/a/30563253/1741602) 
-in order to surpress the USB permission popup system wide and grant permission everytime automatically.
+On most devices this is required, and nothing will work without it:
 
-If your device is not rooted, then there is nothing I can do. This is unfortunately a limitation of 
-the android operating system. If this is for an embedded system I highly recommend rooting the device
-and following the tutoial.
+**Settings → Developer options → Select mock location app → UsbGps4Droid**
 
-### Connecting a USB GPS to your device
-- A USB GPS device can connect to an Android device's charging port, with a USB OTG adapter, if your device supports 
-[USB OTG](https://en.wikipedia.org/wiki/USB_On-The-Go)
+### 2. Connect the receiver
 
-- If your device has normal USB ports (Raspberry PI, computer...) then an OTG adapter is not required.
+- On phones and tablets, use a **USB OTG** adapter — the device must support
+  [USB On-The-Go](https://en.wikipedia.org/wiki/USB_On-The-Go).
+- On boards and head units with normal USB host ports, plug it in directly; no adapter needed.
 
-### Disclaimer
-This app has only been tested on 2 of my devices, running Android 5.1 and 6.0. Any issues with 
-this app on your device, please create a  [github issue](../../issues) and I will resolve the 
-problem as soon as possible.
+### 3. USB permission popup
 
-### Service behaviour 
-The application's background service can be set to start when the device turns on. 
-Currently the service does not automatically start when the GPS device is plugged 
-into the Android device due to more unwanted usb popups.
+Android asks for permission every time the device is reconnected, unless your ROM is modified.
+If your device is rooted you can suppress this system-wide by following
+[this tutorial](https://stackoverflow.com/a/30563253/1741602). On an embedded or in-car
+installation this is strongly recommended. Without root, Android offers no way around it.
 
-For now the background service can be manually started with a start service intent.
+### Starting the service from another app
+
+The background service can be started by intent:
 
 ```java
 Intent intent = new Intent();
 intent.setComponent(
-	new Component(
-		"org.broeuschmeul.android.gps.usb.provider",
-		"org.broeuschmeul.android.gps.usb.provider.driver.USBGpsProviderService"
-	)
-)
-intent.setAction("org.broeuschmeul.android.gps.usb.provider.action.START_GPS_PROVIDER")
+    new ComponentName(
+        "org.broeuschmeul.android.gps.usb.provider",
+        "org.broeuschmeul.android.gps.usb.provider.driver.USBGpsProviderService"
+    )
+);
+intent.setAction("org.broeuschmeul.android.gps.usb.provider.action.START_GPS_PROVIDER");
 ```
 
-Or via a shell command as root.
+Or from a root shell:
 
 ```bash
-am startservice -a org.broeuschmeul.android.gps.usb.provider.action.START_GPS_PROVIDER -n org.broeuschmeul.android.gps.usb.provider/.driver.USBGpsProviderService
+am startservice \
+  -a org.broeuschmeul.android.gps.usb.provider.action.START_GPS_PROVIDER \
+  -n org.broeuschmeul.android.gps.usb.provider/.driver.USBGpsProviderService
 ```
 
-The background service will automatically close itself when the USB device is disconnected for too long.
+The service shuts itself down if the USB device stays disconnected for too long.
 
-## Contributing
+## Building
 
-Any contributions welcome. Please fork this repository and create a pull request notifying your changes and why.
+```bash
+git clone https://github.com/larionovavi-stack/UsbGps4Droid.git
+cd UsbGps4Droid
+./gradlew assembleRelease
+```
+
+`compileSdk 35` · `targetSdk 34` · `minSdk 24` · AndroidX
+
+## Reporting a problem
+
+Include the device model and Android version, the receiver and its chip, the protocol and baud
+rate you selected, and the output of:
+
+```bash
+adb logcat -s UsbGpsProviderService USBGpsManager UbxParser
+```
+
+Without a log there is usually nothing to go on.
 
 ## Screenshots
 
 ### Landscape tablet
 <p align="center">
-    <img src="fastlane/metadata/android/en-US/images/sevenInchScreenshots/2.png" align="center" alt="Main interface marshmallow" width="800"/>
-</p>
-
-#### Android 3.1 interface
-<p align="center">
-    <img src="fastlane/metadata/android/en-US/images/sevenInchScreenshots/3.png" align="center" alt="Main interface honeycomb" width="800"/>
+    <img src="fastlane/metadata/android/en-US/images/sevenInchScreenshots/2.png" align="center" alt="Main interface" width="800"/>
 </p>
 
 ### Portrait
 <p align="center">
-    <img src="fastlane/metadata/android/en-US/images/sevenInchScreenshots/1.png" align="center" alt="Main interface portait" width="400"/>
+    <img src="fastlane/metadata/android/en-US/images/sevenInchScreenshots/1.png" align="center" alt="Main interface portrait" width="400"/>
 </p>
 
 ### Device selection
 <p align="center">
-    <img src="fastlane/metadata/android/en-US/images/sevenInchScreenshots/4.png" align="center" alt="Device choice settings" width="800"/>
+    <img src="fastlane/metadata/android/en-US/images/sevenInchScreenshots/4.png" align="center" alt="Device selection" width="800"/>
 </p>
 
-## Credits
-Originally written by Herbert von Broeuschmeul, and I have taken over maintaining this 
-Project (Which was originally written in 2011). You can find his orginal project at 
-the top of this fork.
+## Contributing
 
-The Herbert's unmaintained version does not work on the newer android operating systems, 
-and has several bugs with the main usb algorithm.
+Contributions are welcome — fork the repository and open a pull request describing what you
+changed and why. Reports of working and non-working hardware are just as valuable as code.
+
+## Credits
+
+Originally written in 2011 by **Herbert von Broeuschmeul**, then maintained by
+**Oliver Bell (freshollie)** until 2020, whose fork this one continues.
+Current maintenance and the v3.x work: **Alexander Larionov**.
 
 ## License
 
-`GPL v3`
+`GPL-3.0` — see [LICENSE](LICENSE).
