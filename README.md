@@ -57,8 +57,8 @@ of the GNSS chip inside — SiRF, MediaTek, u-blox and others.
 | Device | Android | Receiver | Result |
 |---|---|---|---|
 | Xiaomi (HyperOS) | 14 | u-blox LEA-6R via USB-OTG | ✅ works |
+| PX5 car head unit | 10 | u-blox LEA-6R | ✅ works |
 | Car head unit | 8 | u-blox LEA-6R | ✅ works — see mock-location note below |
-| PX5 car head unit | 10 | u-blox LEA-6R | ❌ no data — **under investigation** |
 
 **Please report your own results** — device, Android version, receiver, and whether it worked.
 This table is the most useful thing this project can offer, and it only grows if people write in.
